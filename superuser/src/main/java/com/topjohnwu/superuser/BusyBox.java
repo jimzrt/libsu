@@ -64,7 +64,7 @@ public final class BusyBox {
      */
     public static File BB_PATH = null;
 
-    private static final String ARM_MD5 = "f80d231ec4820c712c00e64f07f66f21";
+    private static final String ARM_MD5 = "94d2ff2ec0d626b0b38736ee7068f0c5";
     private static final String X86_MD5 = "391612ae11978e3d35a429b0729e8317";
 
     /**
