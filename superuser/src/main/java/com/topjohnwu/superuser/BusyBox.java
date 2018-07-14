@@ -30,10 +30,10 @@ import java.util.List;
 /**
  * A class that handles the bundled BusyBox.
  * <p>
- * {@code libsu} bundles with busybox binaries for both arm and x86 (arm64 and x64 are also covered).
- * Developers using {@code libsu} can easily access busybox applets by calling {@link #setup(Context)}
- * before any new shell is created (place this in the same place where you call
- * {@link Shell#setFlags(int)}) and {@link Shell#setInitializer(Shell.Initializer)}.
+ * {@code libsu} bundles busybox binaries with arm/arm64 and x86/x64 covered.
+ * Developers using {@code libsu} can setup busybox by calling {@link #setup(Context)}
+ * before any new shell is created (e.g. the place where you call {@link Shell#setFlags(int)}), or
+ * in the callback methods in {@link Shell.Initializer}.
  * After calling {@link #setup(Context)}, busybox will be installed in the app's internal storage,
  * and all new shells created will have the path to busybox <b>prepended</b> to {@code PATH}.
  * This makes sure all commands are using the applets from busybox, providing predictable
@@ -41,8 +41,8 @@ import java.util.List;
  * common shell utilities. Some operations in {@link com.topjohnwu.superuser.io} depends on a
  * busybox to work properly, check before using them.
  * <p>
- * Note: the busybox binaries will add around 1.6MB to your APK, for developers not willing
- * to use the busybox binaries bundled in {@code libsu}, you can use proguard to remove it:
+ * Note: the busybox binaries will add 1.42MB to your APK. For developers not willing
+ * to use the busybox binaries bundled in {@code libsu}, you can let proguard remove it:
  * remember to <b>NOT</b> call {@link #setup(Context)} anywhere in your code, and enable both
  * <b>minifyEnabled</b> and <b>shrinkResources</b> in your release builds. For more info, please
  * check <a href="https://developer.android.com/studio/build/shrink-code.html">the official documentation</a>.
@@ -57,15 +57,18 @@ public final class BusyBox {
      * If your app would like to rely on external busybox, you can directly assign the path to this field.
      * All new shell instances created will have this directory <b>prepended</b> to {@code PATH}.
      * <p>
-     * For example: Magisk Manager relies on the Magisk's internal busybox (located in
+     * For example: Magisk Manager relies on Magisk's internal busybox (located in
      * {@code /sbin/.core/busybox}). So instead of calling {@link #setup(Context)}, it can directly
      * assign the busybox path to this field to discard the bundled busybox binaries.
      * ({@code BusyBox.BB_PATH = new File("/sbin/.core/busybox")}).
      */
     public static File BB_PATH = null;
 
+
     private static final String ARM_MD5 = "6e565e5806fb099edf8ccae6f15c8b3b";
     private static final String X86_MD5 = "391612ae11978e3d35a429b0729e8317";
+    private static final int APPLET_NUM = 339;
+    private static boolean isInternalBusyBox = false;
 
     /**
      * Setup a busybox environment using the bundled busybox binaries.
@@ -83,6 +86,7 @@ public final class BusyBox {
      * @param context a {@link Context} of the current app.
      */
     public static void setup(Context context) {
+        isInternalBusyBox = true;
         Context de = Build.VERSION.SDK_INT >= Build.VERSION_CODES.N
                 ? context.createDeviceProtectedStorageContext() : context;
         BB_PATH = new File(de.getFilesDir().getParentFile(), "busybox");
@@ -102,14 +106,17 @@ public final class BusyBox {
                 e.printStackTrace();
             }
             bb.setExecutable(true);
-            try {
-                Process p = Runtime.getRuntime().exec(bb + " --install -s " + BB_PATH);
-                p.waitFor();
-            } catch (IOException e) {
-                e.printStackTrace();
-            } catch (InterruptedException e) {
-                e.printStackTrace();
-            }
         }
+    }
+
+    static boolean init(Shell shell) {
+        if (BB_PATH != null) {
+            if (isInternalBusyBox && BB_PATH.listFiles().length != APPLET_NUM + 1) {
+                shell.run(null, null, BB_PATH + "/busybox --install -s " + BB_PATH);
+            }
+            shell.run(null, null, "export PATH=" + BB_PATH + ":$PATH");
+            return true;
+        }
+        return false;
     }
 }

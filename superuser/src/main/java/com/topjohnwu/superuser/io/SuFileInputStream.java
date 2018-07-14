@@ -16,6 +16,7 @@
 
 package com.topjohnwu.superuser.io;
 
+import com.topjohnwu.superuser.Shell;
 import com.topjohnwu.superuser.internal.Factory;
 
 import java.io.BufferedInputStream;
@@ -39,7 +40,7 @@ public class SuFileInputStream extends FilterInputStream {
      * @see FileInputStream#FileInputStream(String)
      */
     public SuFileInputStream(String path) throws FileNotFoundException {
-        this(new SuFile(path));
+        this(new File(path));
     }
 
     /**
@@ -47,17 +48,17 @@ public class SuFileInputStream extends FilterInputStream {
      */
     public SuFileInputStream(File file) throws FileNotFoundException {
         super(null);
-        SuFile f;
-        if (file instanceof SuFile)
-            f = (SuFile) file;
-        else
-            f = new SuFile(file);
-        if (f.useShell()) {
-            // Use shell file io
-            in = Factory.createShellInputStream(f);
+        if (file instanceof SuFile && ((SuFile) file).isSU()) {
+            in = Factory.createShellInputStream(((SuFile) file).getShellFile());
         } else {
-            // Normal file input
-            in = new BufferedInputStream(new FileInputStream(f));
+            try {
+                // Try normal FileInputStream
+                in = new BufferedInputStream(new FileInputStream(file));
+            } catch (FileNotFoundException e) {
+                if (!Shell.rootAccess())
+                    throw e;
+                in = Factory.createShellInputStream(Factory.createShellFile(file));
+            }
         }
     }
 }

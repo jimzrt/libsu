@@ -18,8 +18,6 @@ package com.topjohnwu.superuser.internal;
 
 import android.support.annotation.NonNull;
 
-import com.topjohnwu.superuser.io.SuFile;
-
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
@@ -31,8 +29,8 @@ class ShellInputStream extends InputStream {
     private int count;
     private int bufOff;
 
-    ShellInputStream(SuFile file) throws FileNotFoundException {
-        io = new ShellFileIO(file);
+    ShellInputStream(ShellFile file) throws FileNotFoundException {
+        io = new ShellFileIO(file, "r");
         buf = new byte[4 * 1024 * 1024];
         count = 0;
         bufOff = 0;

@@ -18,6 +18,7 @@ package com.topjohnwu.superuser.io;
 
 import android.support.annotation.NonNull;
 
+import com.topjohnwu.superuser.Shell;
 import com.topjohnwu.superuser.internal.Factory;
 
 import java.io.BufferedOutputStream;
@@ -49,7 +50,7 @@ public class SuFileOutputStream extends FilterOutputStream {
      * @see FileOutputStream#FileOutputStream(String, boolean)
      */
     public SuFileOutputStream(String path, boolean append) throws FileNotFoundException {
-        this(new SuFile(path), append);
+        this(new File(path), append);
     }
 
     /**
@@ -64,17 +65,21 @@ public class SuFileOutputStream extends FilterOutputStream {
      */
     public SuFileOutputStream(File file, boolean append) throws FileNotFoundException {
         super(null);
-        SuFile f;
-        if (file instanceof SuFile)
-            f = (SuFile) file;
-        else
-            f = new SuFile(file);
-        if (f.useShell()) {
-            // Use shell file io
-            out = new BufferedOutputStream(Factory.createShellOutputStream(f, append), 4 * 1024 * 1024);
+        if (file instanceof SuFile && ((SuFile) file).isSU()) {
+            out = new BufferedOutputStream(
+                    Factory.createShellOutputStream(((SuFile) file).getShellFile(), append),
+                    4 * 1024 * 1024);
         } else {
-            // Normal file output
-            out = new BufferedOutputStream(new FileOutputStream(f, append));
+            try {
+                // Try normal FileOutputStream
+                out = new BufferedOutputStream(new FileOutputStream(file, append));
+            } catch (FileNotFoundException e) {
+                if (!Shell.rootAccess())
+                    throw e;
+                out = new BufferedOutputStream(
+                        Factory.createShellOutputStream(Factory.createShellFile(file), append),
+                        4 * 1024 * 1024);
+            }
         }
     }
 

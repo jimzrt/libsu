@@ -17,6 +17,7 @@
 package com.topjohnwu.superuser;
 
 import android.app.Application;
+import android.content.Context;
 import android.os.AsyncTask;
 import android.support.annotation.NonNull;
 import android.support.annotation.Nullable;
@@ -29,6 +30,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.lang.ref.WeakReference;
+import java.lang.reflect.Constructor;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -172,7 +174,8 @@ public abstract class Shell implements Closeable {
     
     private static int flags = 0;
     private static WeakReference<Container> weakContainer = new WeakReference<>(null);
-    private static Initializer initializer = new Initializer();
+    private static Initializer initializer = null;
+    private static Class<? extends Initializer> initClass = null;
 
     /* **************************************
     * Static utility / configuration methods
@@ -190,12 +193,24 @@ public abstract class Shell implements Closeable {
     }
 
     /**
+     * @deprecated
      * Set a desired {@code Initializer}.
      * @see Initializer
      * @param init the desired initializer.
      */
+    @Deprecated
     public static void setInitializer(@NonNull Initializer init) {
         initializer = init;
+    }
+
+    /**
+     * Set a desired {@code Initializer}.
+     * @see Initializer
+     * @param init the class of the desired initializer.
+     *             <strong>If it is a nested class, it MUST be a static nested class!!</strong>
+     */
+    public static void setInitializer(@NonNull Class<? extends Initializer> init) {
+        initClass = init;
     }
 
     /**
@@ -265,10 +280,7 @@ public abstract class Shell implements Closeable {
             callback.onShell(shell);
         } else {
             // Else we add it to the queue and call the callback when we get a Shell
-            AsyncTask.THREAD_POOL_EXECUTOR.execute(() -> {
-                Shell s = getShell();
-                callback.onShell(s);
-            });
+            AsyncTask.THREAD_POOL_EXECUTOR.execute(() -> callback.onShell(getShell()));
         }
     }
 
@@ -289,7 +301,8 @@ public abstract class Shell implements Closeable {
      * The developer should check the status of the returned {@code Shell} with {@link #getStatus()}
      * since it may return the result of any of the 3 possible methods.
      * @return a new {@code Shell} instance.
-     * @throws NoShellException impossible to construct {@code Shell} instance.
+     * @throws NoShellException impossible to construct {@code Shell} instance, or initialization
+     * failed when using the {@link Initializer} set in {@link #setInitializer(Class)}.
      */
     @NonNull
     public static Shell newInstance() {
@@ -344,7 +357,8 @@ public abstract class Shell implements Closeable {
      * @param commands commands that will be passed to {@link Runtime#exec(String[])} to create
      *                 a new {@link Process}.
      * @return a new {@code Shell} instance.
-     * @throws NoShellException the provided command cannot create a new Unix shell.
+     * @throws NoShellException the provided command cannot create a {@code Shell} instance, or
+     * initialization failed when using the {@link Initializer} set in {@link #setInitializer(Class)}.
      */
     @NonNull
     public static Shell newInstance(String... commands) {
@@ -479,18 +493,15 @@ public abstract class Shell implements Closeable {
          * When an asynchronous shell operation is done, it will pass over the result of the output
          * to {@link #onTaskResult(List, List)}. If both outputs are null, then the callback will
          * not be called.
-         * <p>
-         * Similar to {@link CallbackList}, when the asynchronous operation is initialized on the
-         * main thread, the callback will also be run on the main thread. So updating the UI
-         * in the callbacks are allowed.
+         * When an error occurs, {@link #onTaskError(Throwable)} will be invoked.
+         * All callbacks will always run on the main thread.
          * <p>
          * The two lists passed to the callback are wrapped with
-         * {@link Collections#synchronizedList(List)}, so the developer can iterate the list without
-         * worrying about {@link java.util.ConcurrentModificationException}.
+         * {@link Collections#synchronizedList(List)}.
          */
         public interface Callback {
             /**
-             * The method that will be called when asynchronous shell operation is done.
+             * The callback that will be invoked when asynchronous shell operation is done.
              * If {@code out == err}, then {@code err} will be {@code null}.
              * This means if {@link #FLAG_REDIRECT_STDERR} is set, the output of STDERR would be
              * stored in {@code out}, {@code err} will be {@code null}, unless explicitly passed
@@ -499,6 +510,12 @@ public abstract class Shell implements Closeable {
              * @param err the list that stores the output of STDERR.
              */
             void onTaskResult(@Nullable List<String> out, @Nullable List<String> err);
+
+            /**
+             * The callback when asynchronous shell operation throws an error.
+             * @param err the {@code Throwable} thrown in the task.
+             */
+            void onTaskError(@NonNull Throwable err);
         }
 
         /* *************************************
@@ -637,22 +654,15 @@ public abstract class Shell implements Closeable {
         }
     }
 
-    /* *************************
-    * Low level implementations
-    * **************************/
+    /* ***************
+     * Non-static APIs
+     * ****************/
 
     /**
      * Return whether the {@code Shell} is still alive.
      * @return {@code true} if the {@code Shell} is still alive.
      */
     public abstract boolean isAlive();
-
-    /**
-     * Return whether a command exists in the shell.
-     * @param cmd the command to test.
-     * @return {@code true} if the command exists.
-     */
-    public abstract boolean testCmd(String cmd);
 
     /**
      * Execute a {@code Task} with the shell.
@@ -663,47 +673,9 @@ public abstract class Shell implements Closeable {
     public abstract Throwable execTask(@NonNull Task task);
 
     /**
-     * Execute a {@code Task}, and collect outputs synchronously.
-     * @param outList the list storing STDOUT outputs. {@code null} to ignore outputs.
-     * @param errList the list storing STDERR outputs. {@code null} to ignore outputs.
-     * @param task the target list.
-     * @return the {@link Throwable} thrown in {@link Task#run(List, List, String...)},
-     *         {@code null} if nothing is thrown.
-     */
-    public abstract Throwable execSyncTask(List<String> outList, List<String> errList, @NonNull Task task);
-
-    /**
-     * Execute a {@code Task}, and collect outputs asynchronously.
-     * @param outList the list storing STDOUT outputs. {@code null} to ignore outputs.
-     * @param errList the list storing STDERR outputs. {@code null} to ignore outputs.
-     * @param callback invoked when the task is done.
-     * @param task the target list.
-     */
-    public abstract void execAsyncTask(List<String> outList, List<String> errList,
-                                       Async.Callback callback, @NonNull Task task);
-
-    /**
-     * Create a task that executes shell commands.
-     * @param commands the commands to be exectuted.
-     * @return the created {@code Task}.
-     */
-    protected abstract Task createCmdTask(String... commands);
-
-    /**
-     * Create a task that loads {@code InputStream}.
-     * @param is the {@link InputStream} to be loaded.
-     * @return the created {@code Task}.
-     */
-    protected abstract Task createLoadStreamTask(InputStream is);
-
-    /* ***************
-    * Non-static APIs
-    * ****************/
-
-    /**
      * Get the status of the shell.
      * @return the status of the shell.
-     *         Value is either {@link #UNKNOWN}, {@link #NON_ROOT_SHELL}, {@link #ROOT_SHELL},
+     *         Value is either {@link #UNKNOWN}, {@link #NON_ROOT_SHELL}, {@link #ROOT_SHELL}, or
      *         {@link #ROOT_MOUNT_MASTER}
      */
     public int getStatus() {
@@ -712,77 +684,74 @@ public abstract class Shell implements Closeable {
 
     /**
      * Synchronously run commands and stores outputs to the two lists.
-     * <p>
-     * Simply performs {@code execSyncTask(outList, errList, createCmdTask(commands))}
      * @param outList the list storing STDOUT outputs. {@code null} to ignore outputs.
      * @param errList the list storing STDERR outputs. {@code null} to ignore outputs.
      * @param commands the commands to run in the shell.
+     * @return the {@link Throwable} thrown while running the commands, {@code null} if nothing is thrown.
      */
-    public void run(List<String> outList, List<String> errList, @NonNull String... commands) {
-        execSyncTask(outList, errList, createCmdTask(commands));
-    }
+    public abstract Throwable run(List<String> outList, List<String> errList, @NonNull String... commands);
 
     /**
      * Asynchronously run commands, stores outputs to the two lists, and call the callback when
-     * all commands are ran and the outputs are done.
-     * <p>
-     * Simply performs {@code execAsyncTask(outList, errList, callback, createCmdTask(commands))}
+     * all commands are done.
      * @param outList the list storing STDOUT outputs. {@code null} to ignore outputs.
      * @param errList the list storing STDERR outputs. {@code null} to ignore outputs.
-     * @param callback the callback when all commands are ran and the outputs are done.
+     * @param callback the callback when all commands are done.
      * @param commands the commands to run in the shell.
      */
-    public void run(List<String> outList, List<String> errList,
-                    Async.Callback callback, @NonNull String... commands) {
-        execAsyncTask(outList, errList, callback, createCmdTask(commands));
-    }
+    public abstract void run(List<String> outList, List<String> errList,
+                    Async.Callback callback, @NonNull String... commands);
 
     /**
-     * Synchronously load an input stream to the shell and stores outputs to the two lists.
+     * Synchronously load an inputstream to the shell and stores outputs to the two lists.
      * <p>
      * This command is useful for loading a script stored in the APK. An InputStream can be opened
      * from assets with {@link android.content.res.AssetManager#open(String)} or from raw resources
      * with {@link android.content.res.Resources#openRawResource(int)}.
-     * <p>
-     * Simply performs {@code execSyncTask(outList, errList, createLoadStreamTask(in))}
      * @param outList the list storing STDOUT outputs. {@code null} to ignore outputs.
      * @param errList the list storing STDERR outputs. {@code null} to ignore outputs.
      * @param in the InputStream to load
+     * @return the {@link Throwable} thrown while loading inputstream , {@code null} if nothing is thrown.
      */
-    public void loadInputStream(List<String> outList, List<String> errList, @NonNull InputStream in) {
-        execSyncTask(outList, errList, createLoadStreamTask(in));
-    }
+    public abstract Throwable loadInputStream(List<String> outList, List<String> errList, @NonNull InputStream in);
 
     /**
      * Asynchronously load an input stream to the shell, stores outputs to the two lists, and call
-     * the callback when the InputStream is loaded and the outputs are done.
+     * the callback when the execution is done.
      * <p>
      * This command is useful for loading a script stored in the APK. An InputStream can be opened
      * from assets with {@link android.content.res.AssetManager#open(String)} or from raw resources
      * with {@link android.content.res.Resources#openRawResource(int)}.
-     * <p>
-     * Simply performs {@code execAsyncTask(outList, errList, callback, createLoadStreamTask(in))}
      * @param outList the list storing STDOUT outputs. {@code null} to ignore outputs.
      * @param errList the list storing STDERR outputs. {@code null} to ignore outputs.
-     * @param callback the callback when the InputStream is loaded and the outputs are done.
+     * @param callback the callback when the execution is done.
      * @param in the InputStream to load
      */
-    public void loadInputStream(List<String> outList, List<String> errList,
-                                Async.Callback callback, @NonNull InputStream in) {
-        execAsyncTask(outList, errList, callback, createLoadStreamTask(in));
-    }
+    public abstract void loadInputStream(List<String> outList, List<String> errList,
+                                Async.Callback callback, @NonNull InputStream in);
 
     /* **********************
     * Private helper methods
     * ***********************/
 
     private static void initShell(Shell shell) {
-        if (BusyBox.BB_PATH != null) {
-            shell.run(null, null, "export PATH=" + BusyBox.BB_PATH + ":$PATH");
+        Initializer init = null;
+        if (initClass != null) {
+            try {
+                // Force enabling the default constructor as it might be private
+                Constructor<? extends Initializer> ic = initClass.getDeclaredConstructor();
+                ic.setAccessible(true);
+                init = ic.newInstance();
+            } catch (Exception e) {
+                InternalUtils.stackTrace(e);
+            }
+        } else if (initializer != null) {
+            init = initializer;
         }
-        initializer.onShellInit(shell);
-        if (shell.status >= ROOT_SHELL)
-            initializer.onRootShellInit(shell);
+        if (init == null)
+            init = new Initializer();
+        if (!init.init(shell))
+            throw new NoShellException();
     }
 
     private static Shell getGlobalShell() {
@@ -829,7 +798,7 @@ public abstract class Shell implements Closeable {
          * @param stdin the STDIN of the shell.
          * @param stdout the STDOUT of the shell.
          * @param stderr the STDERR of the shell.
-         * @throws Exception any exception thrown will cause the shell be shutdown immediately.
+         * @throws Exception
          */
         void run(OutputStream stdin, InputStream stdout, InputStream stderr) throws Exception;
     }
@@ -884,34 +853,96 @@ public abstract class Shell implements Closeable {
      * <p>
      * This is an advanced feature. If you need to run specific operations when a new {@code Shell}
      * is constructed, subclass this class, add your own implementation, and register it with
-     * {@link #setInitializer(Initializer)}.
-     * The concept is a bit like {@code .bashrc} a specific script/command will run when the shell
+     * {@link #setInitializer(Class)}.
+     * The concept is a bit like {@code .bashrc}: a specific script/command will run when the shell
      * starts up.
-     * A {@code Shell} instance will be passed to the two callbacks, please directly call the low level
-     * APIs on the instance. <strong>DO NOT</strong> call the methods in {@link Shell.Sync} or
-     * {@link Shell.Async}, since the global shell is not setup yet, calling the high level
-     * APIs will end up in an infinite loop of creating new {@code Shell} and calling the initializer.
      * <p>
-     * The {@link #onShellInit(Shell)} will be called as soon as the {@code Shell} is constructed
-     * and tested as a valid shell. {@link #onRootShellInit(Shell)} will only be called after the
+     * The {@link #onShellInit(Context, Shell)} will be called as soon as the {@code Shell} is constructed
+     * and tested as a valid shell. {@link #onRootShellInit(Context, Shell)} will only be called after the
      * {@code Shell} passes the internal root shell test. In short, a non-root shell will only
-     * be initialized with {@link #onShellInit(Shell)}, while a root shell will be initialized with
-     * both {@link #onShellInit(Shell)} and {@link #onRootShellInit(Shell)}.
+     * be initialized with {@link #onShellInit(Context, Shell)}, while a root shell will be initialized with
+     * both {@link #onShellInit(Context, Shell)} and {@link #onRootShellInit(Context, Shell)}.
+     * <p>
+     * Note:
+     * <ul>
+     *     <li>Please directly call the low level APIs on the passed in {@code Shell} instance within
+     *     these two callbacks. <strong>DO NOT</strong> use methods in {@link Shell.Sync} or
+     *     {@link Shell.Async}. The global shell is not set yet, calling these high level APIs
+     *     will end up in an infinite loop of creating new {@code Shell} and calling the initializer.</li>
+     *     <li>If you want the initializer to run in a BusyBox environment, call
+     *     {@link BusyBox#setup(Context)} or set {@link BusyBox#BB_PATH} before any shell will
+     *     be constructed.</li>
+     * </ul>
+     *
+     * <p>
+     * An initializer will be constructed and the callbacks will be invoked each time a new
+     * {@code Shell} is created. A {@code Context} will be passed to the callbacks, use it to
+     * access resources within the APK (e.g. shell scripts).
      */
     public static class Initializer {
+
         /**
+         * @deprecated
          * Called when a new shell is constructed.
-         * The default implementation is NOP.
          * @param shell the newly constructed shell.
          */
+        @Deprecated
         public void onShellInit(@NonNull Shell shell) {}
 
         /**
-         * Called when a new shell has passed the internal root tests.
-         * The default implementation is NOP.
-         * @param shell the newly constructed shell that passes internal root tests.
+         * Called when a new shell is constructed.
+         * Do not call the super method; the default implementation is only for backwards compatibility.
+         * @param context the application context.
+         * @param shell the newly constructed shell.
+         * @return {@code false} when the initialization fails, otherwise {@code true}
+         * @throws Exception any exception thrown is the same as returning {@code false}.
          */
+        public boolean onShellInit(Context context, @NonNull Shell shell) throws Exception {
+            // Backwards compatibility
+            onShellInit(shell);
+            return true;
+        }
+
+        /**
+         * @deprecated
+         * Called when a new shell is constructed and passed the internal root tests.
+         * @param shell the newly constructed shell.
+         */
+        @Deprecated
         public void onRootShellInit(@NonNull Shell shell) {}
+
+        /**
+         * Called when a new shell is constructed and passed the internal root tests.
+         * Do not call the super method; the default implementation is only for backwards compatibility.
+         * @param context the application context.
+         * @param shell the newly constructed shell.
+         * @return {@code false} when the initialization fails, otherwise {@code true}
+         * @throws Exception any exception thrown is the same as returning {@code false}.
+         */
+        public boolean onRootShellInit(Context context, @NonNull Shell shell) throws Exception {
+            // Backwards compatibility
+            onRootShellInit(shell);
+            return true;
+        }
+
+        private boolean init(Shell shell) {
+            Context context = InternalUtils.getContext();
+            try {
+                if (!onShellInit(context, shell))
+                    return false;
+                if (shell.status >= ROOT_SHELL) {
+                    boolean bbInit = BusyBox.init(shell);
+                    if (!onRootShellInit(context, shell))
+                        return false;
+                    if (!bbInit)
+                        BusyBox.init(shell);
+                }
+            } catch (Exception e) {
+                InternalUtils.stackTrace(e);
+                return false;
+            }
+            return true;
+        }
 
     }
 
