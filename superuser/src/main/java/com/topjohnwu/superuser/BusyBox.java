@@ -66,7 +66,7 @@ public final class BusyBox {
 
 
     private static final String ARM_MD5 = "6e565e5806fb099edf8ccae6f15c8b3b";
-    private static final String X86_MD5 = "391612ae11978e3d35a429b0729e8317";
+    private static final String X86_MD5 = "db75965c82d90b45777cbd6d114f6b47";
     private static final int APPLET_NUM = 339;
     private static boolean isInternalBusyBox = false;
 
